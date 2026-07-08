@@ -1,0 +1,89 @@
+# jenk sts
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: jenk
+  namespace: default
+spec:
+  serviceName: "jenk"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jenk
+
+  template:
+    metadata:
+      labels:
+        app: jenk
+
+    spec:
+      containers:
+        - name: jenk
+          image: jenkins/jenkins:lts
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+            - containerPort: 50000
+          resources:
+            requests:
+              cpu: 10m
+              memory: 20Mi
+            limits:
+              cpu: 20m
+              memory: 30Mi
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: jenkins-home
+              mountPath: /var/jenkins_home
+            - name: jenkins-socket
+              mountPath: /var/run/docker.sock
+          
+      initContainers:
+        - name: jenkins-fix
+          image: busybox
+          command: ['sh', '-c', 'chmod 777 /var/jenkins_home']
+          volumeMounts:
+            - name: jenkins-home
+              mountPath: /var/jenkins_home
+
+      volumes:
+        - name: jenkins-socket
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+ 
+
+  volumeClaimTemplates:
+  - metadata:
+      name: jenkins-home
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 200Mi
+
+
+
+
+
+--- # service
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenk
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: jenk
+
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: agent
+      port: 50000
+      targetPort: 50000
