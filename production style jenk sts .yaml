@@ -1,0 +1,178 @@
+give me a final production style version iam using GCP clusters
+cluster name = ajith-cluster
+domain I used = ajith.jenkins.com
+my load balancer ip = give example ip ill change later
+any other details needs , ask me buddy
+
+   
+Here is a production-ready, enterprise-grade overhaul of your Jenkins setup.
+Your original file had a few critical issues that would crash or compromise a production cluster:
+CPU/Memory Limits too low: 20m CPU and 30Mi memory will cause Jenkins to instantly crash with an OutOfMemory (OOM) error. Jenkins needs at least 2–4GiB of RAM to run stably.
+Security Risk: Running Jenkins as root (UID 0) and using chmod 777 on the home directory is a major security risk.
+Architecture: Instead of exposing Jenkins directly via a LoadBalancer service, a production environment on GCP (GKE) should use a ClusterIP Service combined with a GCP Ingress to handle routing, your domain ajith.jenkins.com, and SSL/TLS termination.
+Production-Ready Kubernetes Manifests
+This unified manifest includes the StorageClass (using GCP's high-performance SSDs), the StatefulSet with production resource limits and proper security contexts, the Service, and the Ingress.
+
+
+
+
+YAML
+---
+# 1. STORAGE CLASS FOR GCP PREMIUM SSD
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: jenkins-ssd
+provisioner: pd.csi.storage.gke.io
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: pd-ssd
+
+---
+# 2. STATEFULSET
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: jenkins
+  namespace: default
+  labels:
+    app.kubernetes.io/name: jenkins
+spec:
+  serviceName: jenkins
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jenkins
+  template:
+    metadata:
+      labels:
+        app: jenkins
+    spec:
+      # Run as the official jenkins user (uid 1000) for production security
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+
+      containers:
+        - name: jenkins
+          image: jenkins/jenkins:lts
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 50000
+              name: agent-jnlp
+          
+          # Production sized resources
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          
+          # Environment variables to configure Java heap safely within limits
+          env:
+            - name: JAVA_OPTS
+              value: "-Xms1500m -Xmx3000m -Djenkins.install.runSetupWizard=true"
+          
+          # Health checks to ensure zero-downtime and automated recovery
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            
+          volumeMounts:
+            - name: jenkins-home
+              mountPath: /var/jenkins_home
+
+      # Removed the docker.sock mount. In production GKE, use Kaniko or Kubernetes agents 
+      # rather than granting Jenkins container root access to the host's Docker daemon.
+
+  volumeClaimTemplates:
+  - metadata:
+      name: jenkins-home
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: jenkins-ssd
+      resources:
+        requests:
+          storage: 50Gi # Production standard minimum sizing
+
+---
+# 3. SERVICE (ClusterIP for internal Routing)
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    app: jenkins
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: agent
+      port: 50000
+      targetPort: 50000
+
+---
+# 4. GCP INGRESS (Creates External HTTP(S) Load Balancer)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jenkins-ingress
+  namespace: default
+  annotations:
+    # Generates a global external IP via GCP HTTP(S) Load Balancing
+    kubernetes.io/ingress.class: "gce"
+spec:
+  rules:
+  - host: ajith.jenkins.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: jenkins
+            port:
+              number: 8080
+
+
+
+
+
+
+
+
+
+🛠️ Next Steps & Deployment
+Apply the manifest:
+Bash
+kubectl apply -f jenkins-prod.yaml
+Get your Load Balancer IP:
+After applying, GCP takes about 2 to 5 minutes to provision the Global Load Balancer. Run this command to fetch your public IP:
+Bash
+kubectl get ingress jenkins-ingress -w
+(Example Output: ADDRESS = 34.120.45.111)
+Map your Domain:
+Go to your DNS provider (e.g., Google Domains, Cloudflare) and create an A Record pointing ajith.jenkins.com to the IP address obtained in step 2.
+A note on your next step: HTTPS/SSL
+For true production usage, you will want an SSL certificate so you can access your domain securely over https://.
+Would you like me to add a Google-managed SSL Certificate resource (ManagedCertificate) to this manifest so GCP takes care of provisioning and renewing your SSL for ajith.jenkins.com automatically?
